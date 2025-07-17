@@ -45,7 +45,7 @@ def build_graph(node_num, nodes_feature):
             edge_list.append((i,j))
     G.add_edges_from(edge_list)
 
-    adj = nx.to_scipy_sparse_matrix(G).tocoo()
+    adj = nx.to_scipy_sparse_array(G).tocoo()
     row = torch.from_numpy(adj.row.astype(np.int64)).to(torch.long)
     col = torch.from_numpy(adj.col.astype(np.int64)).to(torch.long)
     edge_index = torch.stack([row, col], dim=0)

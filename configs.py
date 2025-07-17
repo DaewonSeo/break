@@ -5,7 +5,8 @@ class Config():
         # some hyperparameters
         self.limit_num_sen = 25 # 25 for GossipCop and PolitiFact, 30 for Snopes, and 50 for PolitFact-S
         self.limit_num_words = 13 # 13 for GossipCop and PolitiFact, 80 for Snopes, and 40 for PolitFact-S
-        self.lr = 0.00001 
+        #self.lr = 0.00001
+        self.lr = 5e-5 
         self.lr_edge = 0.10 
         self.Seed = 1998 
         self.weight_decay = 0.0005
@@ -16,13 +17,14 @@ class Config():
         self.test_perc = 0.1 # 10% of all dataset for testing
         self.val_perc =  0.11 # 11% of the left data (90%) for validating, i.e., ≈ 10% of all dataset
         self.beta = 0.1
-
+        #self.beta = 0.1
+        # training parameters   
         self.epoch = 100
         self.batch_size = 8 # 8 for GossipCop and PolitiFact, 64 for Snopes and PolitFact-S
 
         # set devices and pre_trained model
         self.device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
-        self.bert_model = 'model/bert-base-uncased' # you can download BERT model and store it in this direction
+        self.bert_model = 'bert-base-uncased' # you can download BERT model and store it in this direction
 
         # data path
         self.dataset_name = "politic"

@@ -17,34 +17,6 @@ cfg = Config()
 from sklearn.preprocessing import MinMaxScaler
 
 
-class MyResNet50(nn.Module):
-    def __init__(self, cfg):
-        super(MyResNet50, self).__init__()
-        self.resnet50_pret = models.resnet50(pretrained=True)
-        self.resnet50_pret.fc = nn.Linear(2048,768).to(cfg.device) # dimension reduction
-    
-    def forward(self, img_id):
-        # construct resnet50_pretrain model
-        transform1 = transforms.Compose([  
-        transforms.Resize(256),  
-        transforms.CenterCrop(224),  
-        transforms.ToTensor()])  
-        try:
-            img = Image.open(f"{cfg.img_path}/{img_id}.jpg" ) 
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            img1 = transform1(img).to(cfg.device)  
-            resnet50_feature_extractor = self.resnet50_pret  
-            torch.nn.init.eye_(resnet50_feature_extractor.fc.weight)
-
-            for name, param in resnet50_feature_extractor.named_parameters():
-                    param.requires_grad = False
-            x = torch.unsqueeze(img1, dim=0).float()
-            y = resnet50_feature_extractor(x) 
-            return y
-        except:
-            return torch.zeros((1,cfg.input_dim)).to(cfg.device)
-
 class BertPre1(nn.Module):
     def __init__(self, cfg):
         super(BertPre1, self).__init__()
@@ -110,70 +82,73 @@ class EdgeWeightCal1(nn.Module):
 
 
 class MyModel(nn.Module):
-    def __init__(self,cfg):
-        super(MyModel,self).__init__()
+    def __init__(self, cfg):
+        super(MyModel, self).__init__()
         self.bert_pret1 = BertPre1(cfg)
-        self.bert_pret2 = BertPre2(cfg) # sequential encoder
+        self.bert_pret2 = BertPre2(cfg)  # sequential encoder
 
-        self.resnet50 = MyResNet50(cfg)
+        # self.resnet50 = MyResNet50(cfg) # 이미지 처리 부분 제거
 
         self.edge_weight1 = EdgeWeightCal1(cfg)
 
         self.conv1 = GCNConv(cfg.input_dim, cfg.output_dim)
-        self.MLP_bert = nn.Sequential(nn.Linear(cfg.input_dim, cfg.output_dim*2), 
-                        nn.Linear(cfg.output_dim*2,cfg.output_dim))
+        self.MLP_bert = nn.Sequential(nn.Linear(cfg.input_dim, cfg.output_dim * 2),
+                                      nn.Linear(cfg.output_dim * 2, cfg.output_dim))
 
-        self.MLP_pred = nn.Sequential(nn.Linear(cfg.output_dim*2, cfg.hidden_dim),
-                                nn.Linear(cfg.hidden_dim,cfg.final_dim))
-  
+        self.MLP_pred = nn.Sequential(nn.Linear(cfg.output_dim * 2, cfg.hidden_dim),
+                                      nn.Linear(cfg.hidden_dim, cfg.final_dim))
 
-    def forward(self, sent, nodes_num, ids, Flag):
+    # forward 함수의 인자에서 이미지 ID를 받는 'ids' 제거
+    def forward(self, sent, nodes_num, Flag):
         pred_list = []
         kl_list = []
         for i, sent_i in enumerate(sent):
-            # only preserve the meaningful nodes, e.g., a news with 5 sentences will only use 5 nodes, 
-            # rather than 25 in cfg.limit_num_sen, which avoid 0 padding.
-            sent_i = sent_i[0:nodes_num[i]] 
+            # 의미 있는 노드(문장)만 사용
+            sent_i = sent_i[0:nodes_num[i]]
 
-            # vectorization
+            # 벡터화
             nodes_vecs = self.bert_pret1(sent_i)
-            semantic_vecs = self.bert_pret2(sent_i) # sequential representation of news sentences
-            img_vecs = self.resnet50(ids[i])
+            semantic_vecs = self.bert_pret2(sent_i)  # sequential representation of news sentences
 
-            len_img_vecs = len(img_vecs)
-            len_cat_vecs = nodes_num[i]+len_img_vecs
-            if len_img_vecs != 0:
-                nodes_vecs = torch.cat((nodes_vecs, img_vecs), dim=0)
-                semantic_vecs = torch.cat((semantic_vecs, img_vecs), dim=0) # sequential representation of news content
+            # --- 이미지 특징 추출 및 결합 로직 전체 제거 ---
+            # img_vecs = self.resnet50(ids[i])
+            #
+            # len_img_vecs = len(img_vecs)
+            # len_cat_vecs = nodes_num[i]+len_img_vecs
+            # if len_img_vecs != 0:
+            #     nodes_vecs = torch.cat((nodes_vecs, img_vecs), dim=0)
+            #     semantic_vecs = torch.cat((semantic_vecs, img_vecs), dim=0) # sequential representation of news content
+            # ---------------------------------------------
 
-            # graph construction
+            # 그래프 구성 (이제 노드 개수는 순수 문장 개수)
+            len_cat_vecs = nodes_num[i]
             text_graph = build_graph(len_cat_vecs, nodes_vecs).to(cfg.device)
             node_fea, edge_index = text_graph.x, text_graph.edge_index
 
-            # edge weight inferring
+            # 엣지 가중치 추론
             edge_weight1 = self.edge_weight1(node_fea, semantic_vecs)
 
-            # graph representation
+            # 그래프 표현 학습
             conv1_graph = self.conv1(node_fea, edge_index, edge_weight1)
 
-            # dimension reduction
+            # 차원 축소
             semantic_vecs = self.MLP_bert(semantic_vecs)
 
-            # KL divergence
-            if Flag=="outer":
-                kldiv = torch.nn.functional.kl_div(semantic_vecs.softmax(dim=-1).log(),conv1_graph.softmax(dim=-1),reduction="sum")
-                if (kldiv > 999): # avoid too large kl
+            # KL 발산 계산
+            if Flag == "outer":
+                kldiv = torch.nn.functional.kl_div(semantic_vecs.softmax(dim=-1).log(),
+                                                   conv1_graph.softmax(dim=-1), reduction="sum")
+                if (kldiv > 999):  # avoid too large kl
                     kldiv = torch.tensor(999).to(cfg.device)
                 kl_list.append(kldiv)
 
-
-            graph_seman = torch.cat((semantic_vecs,conv1_graph),dim=1)
+            graph_seman = torch.cat((semantic_vecs, conv1_graph), dim=1)
             pred = self.MLP_pred(graph_seman)
-            pred = torch.mean(pred,dim=0)
+            pred = torch.mean(pred, dim=0)
             pred_list.append(pred)
 
         pred = torch.stack(pred_list, 0)
-        if Flag=="outer":
+        if Flag == "outer":
             kldiv = torch.stack(kl_list, 0)
             return pred, kldiv
         else:

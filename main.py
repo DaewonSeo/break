@@ -1,3 +1,4 @@
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.nn import parameter
 from configs import Config
 from model import MyModel
@@ -60,12 +61,13 @@ if __name__ == "__main__":
         cfg.dataset_name = args.dataset_name
         cfg.dataset_path = "data/"+ cfg.dataset_name + "/" + cfg.dataset_name +"_news.tsv"
         cfg.img_path = "data/"+ cfg.dataset_name + "/imgs"
-        cfg.model_path = "data/"+ cfg.dataset_name + "/" + cfg.dataset_name +"_checkpoint.pt"
+        #cfg.model_path = "data/"+ cfg.dataset_name + "/" + cfg.dataset_name +"_checkpoint.pt"
         cfg.news_list = "data/"+ cfg.dataset_name + "/" + cfg.dataset_name +"_news.npy"
         cfg.news_label = "data/"+ cfg.dataset_name + "/" + cfg.dataset_name +"_label.npy"
         cfg.news_id = "data/"+ cfg.dataset_name + "/" + cfg.dataset_name +"_id.npy"
         cfg.nodes_num_data = "data/"+ cfg.dataset_name + "/" + cfg.dataset_name +"_node.npy"
 
+        
     if args.hyperpara != -1:
         cfg.beta = args.hyperpara
     
@@ -86,6 +88,7 @@ if __name__ == "__main__":
     print("*" * 80)  
     print("Constructing Model...")
     LSSDN = MyModel(cfg)
+    
     print("device:",cfg.device)
     LSSDN = LSSDN.to(cfg.device)
     early_stopping = EarlyStopping()
@@ -102,7 +105,7 @@ if __name__ == "__main__":
     outer_optimizer = torch.optim.Adam([
         {'params': LSSDN.bert_pret1.parameters()},
         {'params': LSSDN.bert_pret2.parameters()},
-        {'params': LSSDN.resnet50.parameters()},
+        #{'params': LSSDN.resnet50.parameters()},
         {'params': LSSDN.conv1.parameters()}, 
         {'params': LSSDN.MLP_bert.parameters()}, # MLP
         {'params': LSSDN.MLP_pred.parameters()}], cfg.lr, weight_decay=cfg.weight_decay, eps=1e-6)
@@ -110,7 +113,7 @@ if __name__ == "__main__":
         {'params': LSSDN.edge_weight1.parameters()},
         ], cfg.lr_edge, weight_decay=cfg.weight_decay, eps=1e-6)
     print("*" * 80)
-
+    #scheduler = ReduceLROnPlateau(outer_optimizer, mode='min', factor=0.1, patience=5, verbose=True)
     # Get data from the dataset
     news_tit_cont, news_label, news_id = get_data(cfg.dataset_path)
 
@@ -126,15 +129,31 @@ if __name__ == "__main__":
         nodes_num.append(node_num)
     
     # # Save the tokens for convenient
-    # np.save(cfg.news_list,sents_list)
-    # np.save(cfg.news_label,news_label)
-    # np.save(cfg.nodes_num_data,nodes_num)
-    # np.save(cfg.news_id,news_id)
+    np.save(cfg.news_list,sents_list)
+    np.save(cfg.news_label,news_label)
+    np.save(cfg.nodes_num_data,nodes_num)
+    np.save(cfg.news_id,news_id)
 
-    sents_list = np.load(cfg.news_list,allow_pickle=True)
-    news_label = np.load(cfg.news_label,allow_pickle=True)
-    news_id = np.load(cfg.news_id,allow_pickle=True)
-    nodes_num = np.load(cfg.nodes_num_data,allow_pickle=True)
+    # --- 아래 필터링 코드 추가 ---
+    print(f"데이터 필터링 전, 원본 데이터 개수: {len(news_label)}")
+
+    # 유효한 레이블을 가진 인덱스만 추출
+    valid_indices = [i for i, label in enumerate(news_label) if label >= 0]
+
+    sents_list = [sents_list[i] for i in valid_indices]
+
+    # NumPy 배열들은 기존 방식대로 필터링
+    news_label = [news_label[i] for i in valid_indices]
+    nodes_num = [nodes_num[i] for i in valid_indices]
+    news_id = [news_id[i] for i in valid_indices]
+
+    print(f"데이터 필터링 후, 유효 데이터 개수: {len(news_label)}")
+# --- 여기까지 추가 ---
+
+    # sents_list = np.load(cfg.news_list,allow_pickle=True)
+    # news_label = np.load(cfg.news_label,allow_pickle=True)
+    # news_id = np.load(cfg.news_id,allow_pickle=True)
+    # nodes_num = np.load(cfg.nodes_num_data,allow_pickle=True)
 
     train_val_news_list, test_news_list, train_val_news_label, test_news_label, train_val_news_node, test_news_node, train_val_news_id, test_news_id \
         = train_test_split(sents_list, news_label, nodes_num, news_id, random_state=cfg.Seed, test_size=cfg.test_perc)
@@ -155,9 +174,9 @@ if __name__ == "__main__":
     val_sampler = RandomSampler(val_news)
     test_sampler = RandomSampler(test_news)
     
-    train_dataloader = DataLoader(train_news, sampler=train_sampler,batch_size=cfg.batch_size)
-    val_dataloader = DataLoader(val_news, sampler=val_sampler,batch_size=cfg.batch_size)
-    test_dataloader = DataLoader(test_news, sampler=test_sampler,batch_size=cfg.batch_size)
+    train_dataloader = DataLoader(train_news, sampler=train_sampler,batch_size=cfg.batch_size, drop_last=True)
+    val_dataloader = DataLoader(val_news, sampler=val_sampler,batch_size=cfg.batch_size, drop_last=True)
+    test_dataloader = DataLoader(test_news, sampler=test_sampler,batch_size=cfg.batch_size, drop_last=True)
 
     draw_train_loss, draw_val_loss = [], []
     min_val_loss = 10.0
@@ -182,7 +201,16 @@ if __name__ == "__main__":
             
             # Inner optimization
             inner_optimizer.zero_grad()
-            pred_res = LSSDN.forward(train_news, train_node, train_id, Flag="inner")
+            pred_res = LSSDN.forward(train_news, train_node, Flag="inner")
+
+
+            #print("--- Debug Info ---")
+            #print("Prediction shape:", pred_res.shape)
+            #print("Label shape:", train_label.shape)
+            #print("Label unique values:", torch.unique(train_label))
+            #print("Label min:", torch.min(train_label))
+            #print("Label max:", torch.max(train_label))
+            #print("------------------")
 
             batch_loss_train = loss_pred(pred_res, train_label)
             epoch_loss_train += train_label.size()[0] * batch_loss_train.item()
@@ -191,7 +219,7 @@ if __name__ == "__main__":
 
             # Outer optimization
             outer_optimizer.zero_grad()
-            pred_res, kldiv = LSSDN.forward(train_news, train_node, train_id, Flag="outer")
+            pred_res, kldiv = LSSDN.forward(train_news, train_node, Flag="outer")
             kldiv = torch.mean(kldiv)
 
             batch_loss_train = loss_pred(pred_res, train_label) + cfg.beta*kldiv
@@ -216,7 +244,7 @@ if __name__ == "__main__":
                 val_label = batch[1].long().to(cfg.device)
                 val_node = batch[2].long().to(cfg.device)
                 val_id = batch[3]
-                pred_res = LSSDN.forward(val_news, val_node, val_id, Flag="outer")
+                pred_res, _ = LSSDN.forward(val_news, val_node, Flag="outer")
 
                 batch_loss_val = loss_pred(pred_res, val_label)
                 epoch_loss_val += val_label.size()[0]*batch_loss_val.item()
@@ -232,6 +260,9 @@ if __name__ == "__main__":
             draw_val_loss.append(epoch_loss_val)
             print(f"********epoch:{epoch+1}, val_loss:{epoch_loss_val:.4f},  Acc:{Acc:.3f}, Pre:{Pre:.3f}, Rec:{Rec:.3f}, F1:{F1:.3f}")
 
+            print("***********************************")
+    
+            #scheduler.step(epoch_loss_val)
             # early stopping
             early_stopping(epoch_loss_val, LSSDN)
             if early_stopping.early_stop:
@@ -256,7 +287,7 @@ if __name__ == "__main__":
             test_node = batch[2].long().to(cfg.device)
             test_id = batch[3]
 
-            pred_res = Model.forward(test_news, test_node, test_id, Flag="outer")
+            pred_res, _ = Model.forward(test_news, test_node, Flag="outer")
             pred_one = torch.argmax(pred_res, dim=1)
             pred_one_batch.append(pred_one)
             test_y_batch.append(test_label)
